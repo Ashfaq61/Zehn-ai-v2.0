@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Zehn AI</string>
+    <string name="accessibility_service_description">Zehn AI Agent performs voice-requested taps, scrolls, text input, and screen reading strictly within your safety policies and confirmation gates.</string>
+    <string name="wake_word_notification_channel">Zehn Wake Word</string>
+    <string name="wake_word_notification_title">Zehn AI Listening</string>
+    <string name="wake_word_notification_text">Offline "Hey Zehn" detector active. Tap to open Orb.</string>
+    <string name="overlay_notification_channel">Zehn Floating Orb</string>
+    <string name="quick_tile_label">Zehn Voice</string>
+    <string name="widget_description">Quick launch Zehn AI voice orb and status</string>
+    <string name="widget_tap_to_speak">Tap to speak to Zehn AI</string>
+    <string name="error_app_not_installed">Requested app is not installed on this device.</string>
+    <string name="error_no_api_key">No API key configured for the active provider. Open API Keys to add one or switch to Offline LiteRT mode.</string>
+    <string name="screen_capture_notification_channel">Zehn Screen Vision Capture</string>
+    <string name="screen_capture_notification_title">Zehn Screen Vision Active</string>
+    <string name="screen_capture_notification_text">User-consented MediaProjection capture ready for screen OCR/vision.</string>
+</resources>

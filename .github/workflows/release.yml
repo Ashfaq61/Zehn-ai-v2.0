@@ -1,0 +1,146 @@
+name: Zehn AI Release Builder
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keystore-gen-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build Signed Release APK & Publish GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Accept Android SDK licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Set up Gradle 8.10.2 (wrapper-independent)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Auto-generate or restore debug keystore
+        run: |
+          if [ -f app/debug.keystore ]; then
+            echo "✅ app/debug.keystore exists in repo. Using it."
+          else
+            echo "⚠️ app/debug.keystore missing."
+            if [ "${{ github.event_name }}" == "push" ] && [ "${{ github.ref }}" == "refs/heads/main" ]; then
+              echo "Push to main detected. Generating permanent debug.keystore..."
+              mkdir -p app
+              keytool -genkey -v -keystore app/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Zehn AI,O=Zehn,C=PK"
+              git config --global user.name "github-actions[bot]"
+              git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git pull origin main --rebase || true
+              git add -f app/debug.keystore
+              git commit -m "chore(keystore): auto-generate permanent app/debug.keystore [skip ci]" || true
+              git push origin main || echo "Push skipped or not needed"
+            else
+              echo "Branch build or PR build. Creating temporary keystore in runner only (not committed)."
+              mkdir -p app
+              keytool -genkey -v -keystore app/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Zehn AI,O=Zehn,C=PK"
+              echo "⚠️ WARNING: debug.keystore was missing on this branch/PR build. A temporary keystore was created in the runner only. This APK cannot update an installed app signed with a permanent keystore." >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Compute Monotonic Release Version
+        id: ver
+        run: |
+          RUN_CODE="${GITHUB_RUN_NUMBER}"
+          VER_NAME="4.0.${RUN_CODE}"
+          TAG_NAME="v${VER_NAME}"
+          echo "version_code=${RUN_CODE}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${VER_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Unit Tests & Assemble Release APK
+        run: |
+          gradle testDebugUnitTest assembleRelease \
+            -PZEHN_VERSION_CODE=${{ steps.ver.outputs.version_code }} \
+            --stacktrace | tee gradle-release.log
+
+      - name: Verify Package Name, Rename APK & Compute SHA-256
+        id: artifact
+        run: |
+          RAW_APK=$(find app/build/outputs/apk/release -maxdepth 1 -name "*.apk" | head -n 1)
+          if [ -z "$RAW_APK" ] || [ ! -s "$RAW_APK" ]; then
+            RAW_APK=$(find app/build/outputs/apk/debug -maxdepth 1 -name "*.apk" | head -n 1)
+          fi
+          if [ -z "$RAW_APK" ] || [ ! -s "$RAW_APK" ]; then
+            echo "Built APK is missing or empty."
+            exit 1
+          fi
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort -V | tail -n 1)
+          if [ -n "$AAPT2" ]; then
+            BADGING=$("$AAPT2" dump badging "$RAW_APK" | head -n 2)
+            echo "$BADGING"
+            echo "$BADGING" | grep -q "name='com.zehn.assistant'"
+          fi
+          OUT_APK="zehn-ai-${{ steps.ver.outputs.tag_name }}.apk"
+          cp "$RAW_APK" "$OUT_APK"
+          sha256sum "$OUT_APK" | tee "${OUT_APK}.sha256"
+          SHA_HEX=$(awk '{print $1}' "${OUT_APK}.sha256")
+          echo "apk_file=${OUT_APK}" >> "$GITHUB_OUTPUT"
+          echo "sha_file=${OUT_APK}.sha256" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA_HEX}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Changelog from Merged PR Titles
+        id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "## Zehn AI ${{ steps.ver.outputs.tag_name }}"
+            echo ""
+            echo "- versionCode: ${{ steps.ver.outputs.version_code }}"
+            echo "- versionName: ${{ steps.ver.outputs.version_name }}"
+            echo "- sha256: ${{ steps.artifact.outputs.sha256 }}"
+            echo ""
+            echo "### Merged Changes"
+          } > release_notes.md
+
+          curl -sSL -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=10" \
+            | python3 -c '
+          import json, sys
+          try:
+              prs = json.load(sys.stdin)
+              lines = []
+              for pr in prs:
+                  if pr.get("merged_at"):
+                      lines.append(f"- PR #{pr.get(\"number\")}: {pr.get(\"title\", \"\").strip()}")
+              print("\n".join(lines) if lines else "- Direct commit / maintenance release on main")
+          except Exception:
+              print("- Verified build on main")
+          ' >> release_notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag_name }}
+          name: Zehn AI ${{ steps.ver.outputs.tag_name }}
+          body_path: release_notes.md
+          overwrite_files: false
+          files: |
+            ${{ steps.artifact.outputs.apk_file }}
+            ${{ steps.artifact.outputs.sha_file }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

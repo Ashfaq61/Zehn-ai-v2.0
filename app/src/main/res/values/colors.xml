@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="zehn_bg_dark">#121622</color>
+    <color name="zehn_surface_clay">#1A2032</color>
+    <color name="zehn_cyan">#22D3EE</color>
+    <color name="zehn_violet">#8B5CF6</color>
+    <color name="zehn_frost">#F4F7FF</color>
+</resources>

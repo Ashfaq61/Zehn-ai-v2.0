@@ -1,0 +1,95 @@
+name: Zehn AI CI Verification
+
+on:
+  push:
+    branches:
+      - 'zehn-auto/**'
+  pull_request:
+    branches:
+      - main
+      - 'zehn-auto/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keystore-gen-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify_and_build:
+    name: Test, Lint, Dependency Audit & Artifact Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Accept Android SDK licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Set up Gradle 8.10.2 (wrapper-independent)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Auto-generate or restore debug keystore
+        run: |
+          if [ -f app/debug.keystore ]; then
+            echo "✅ app/debug.keystore exists in repo. Using it."
+          else
+            echo "⚠️ app/debug.keystore missing. Creating temporary keystore in runner only (branch/PR build)."
+            mkdir -p app
+            keytool -genkey -v -keystore app/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Zehn AI,O=Zehn,C=PK"
+            echo "⚠️ WARNING: debug.keystore was missing on this branch/PR build. A temporary keystore was created in the runner only. This APK cannot update an installed app signed with a permanent keystore." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check Dependencies, Unit Tests & Lint
+        run: |
+          gradle :app:dependencies --configuration releaseRuntimeClasspath > build-dependencies.txt
+          gradle testDebugUnitTest lintDebug assembleDebug --stacktrace | tee gradle-build.log
+
+      - name: Verify Package Name & Debug APK
+        run: |
+          APK_PATH=$(find app/build/outputs/apk/debug -maxdepth 1 -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ] || [ ! -s "$APK_PATH" ]; then
+            echo "Debug APK was not generated or is empty."
+            exit 1
+          fi
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name aapt2 | sort -V | tail -n 1)
+          if [ -n "$AAPT2" ]; then
+            BADGING=$("$AAPT2" dump badging "$APK_PATH" | head -n 2)
+            echo "$BADGING"
+            echo "$BADGING" | grep -q "name='com.zehn.assistant'"
+          fi
+          ls -lh "$APK_PATH"
+          sha256sum "$APK_PATH" | tee apk-checksums.txt
+
+      - name: Upload Test, Lint & Build Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zehn-ci-logs-and-reports
+          path: |
+            gradle-build.log
+            build-dependencies.txt
+            apk-checksums.txt
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Branch CI APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zehn-ai-branch-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

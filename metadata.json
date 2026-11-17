@@ -1,0 +1,6 @@
+{
+  "name": "Zehn AI",
+  "description": "Voice AI assistant and phone-automation agent with modular voice pipeline, multi-provider cloud & LiteRT-LM on-device AI, 4-tier memory, and safety-gated Accessibility automation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
